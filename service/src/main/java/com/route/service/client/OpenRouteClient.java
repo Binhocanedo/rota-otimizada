@@ -95,11 +95,9 @@ public class OpenRouteClient {
                             "Distância nula na posição [" + i + "][" + j + "]"
                     );
                 }
-
                 matrix[i][j] = value;
             }
         }
-
         return matrix;
     }
 }
