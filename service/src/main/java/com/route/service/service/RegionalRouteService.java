@@ -2,6 +2,7 @@ package com.route.service.service;
 
 import com.route.service.dto.ManagerRouteDTO;
 import com.route.service.dto.RouteStopDTO;
+import com.route.service.dto.ScheduleDTO;
 import com.route.service.dto.UserDTO;
 import com.route.service.dto.request.RegionalRequestDTO;
 import com.route.service.dto.response.RegionalRouteResponseDTO;
@@ -17,96 +18,57 @@ public class RegionalRouteService {
 
     private final RouteOptimizationService routeOptimizationService;
     private final ScheduleSimulationService scheduleSimulationService;
+    private final MatrixService matrixService;
 
     public RegionalRouteService(
             RouteOptimizationService routeOptimizationService,
-            ScheduleSimulationService scheduleSimulationService) {
+            ScheduleSimulationService scheduleSimulationService,
+            MatrixService matrixService) {
+
         this.routeOptimizationService = routeOptimizationService;
         this.scheduleSimulationService = scheduleSimulationService;
-    }
-
-    private double[][] buildDistanceMatrix(List<CustomerModel> customers) {
-
-        int size = customers.size();
-        double[][] matrix = new double[size][size];
-
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
-
-                if (i == j) {
-                    matrix[i][j] = 0;
-                } else {
-                    double dx = customers.get(i).getLat() - customers.get(j).getLat();
-                    double dy = customers.get(i).getLng() - customers.get(j).getLng();
-                    matrix[i][j] = Math.sqrt(dx * dx + dy * dy);
-                }
-            }
-        }
-
-        return matrix;
-    }
-
-    private List<CustomerModel> mapIndexesToCustomers(
-            List<Integer> routeIndexes,
-            List<CustomerModel> customers) {
-
-        List<CustomerModel> ordered = new ArrayList<>();
-
-        for (int i = 0; i < routeIndexes.size(); i++) {
-
-            int index = routeIndexes.get(i);
-
-            // Ignorar o último 0 (retorno ao início)
-            if (i == routeIndexes.size() - 1 && index == 0) {
-                break;
-            }
-
-            ordered.add(customers.get(index));
-        }
-
-        return ordered;
+        this.matrixService = matrixService;
     }
 
     public RegionalRouteResponseDTO generateRoutes(RegionalRequestDTO request) {
 
-        List<ManagerRouteDTO> managerRoutes = new ArrayList<>();
+        List<ManagerRouteDTO> routes = new ArrayList<>();
 
         for (UserDTO user : request.getUsers()) {
 
             List<CustomerModel> customers = extractCustomers(user);
 
-            // 1️⃣ Gera matriz de distância
-            double[][] matrix = buildDistanceMatrix(customers);
+            if (customers.isEmpty()) {
+                continue;
+            }
 
-            // 2️⃣ Rota inicial
-            List<Integer> routeIndexes =
-                    routeOptimizationService.nearestNeighbor(matrix);
+            double[][] durationMatrix = matrixService.buildDurationMatrix(customers);
 
-            // 3️⃣ Melhora com 2-opt
-            routeIndexes =
-                    routeOptimizationService.twoOpt(routeIndexes, matrix);
-            // 4️⃣ Converter índices em lista ordenada
-            List<CustomerModel> ordered =
-                    mapIndexesToCustomers(routeIndexes, customers);
+            List<Integer> initialRoute =
+                    routeOptimizationService.nearestNeighbor(durationMatrix);
 
-            // 2️⃣ Simular agenda
-            List<RouteStopDTO> schedule =
+            List<Integer> optimizedRoute =
+                    routeOptimizationService.twoOpt(initialRoute, durationMatrix);
+
+            List<RouteStopDTO> stops =
                     scheduleSimulationService.simulate(
-                            ordered,
+                            customers,
+                            optimizedRoute,
+                            durationMatrix,
                             LocalTime.of(12, 0),
                             LocalTime.of(13, 0)
                     );
 
             ManagerRouteDTO managerRoute = new ManagerRouteDTO();
             managerRoute.setManagerProductionCode(user.getProductionCode());
-            managerRoute.setRoute(schedule);
+            managerRoute.setRoute(stops);
 
-            managerRoutes.add(managerRoute);
+            routes.add(managerRoute);
         }
 
         RegionalRouteResponseDTO response = new RegionalRouteResponseDTO();
         response.setRegionalCode(request.getRegionalInfo().getRegionalCode());
-        response.setRoutes(managerRoutes);
+        response.setRoutes(routes);
 
         return response;
     }
@@ -115,22 +77,32 @@ public class RegionalRouteService {
 
         List<CustomerModel> customers = new ArrayList<>();
 
-        user.getSchedule().stream()
-                .filter(s -> s.getCustomer() != null)
-                .forEach(s -> {
+        for (ScheduleDTO schedule : user.getSchedule()) {
 
-                    CustomerModel model = new CustomerModel();
-                    model.setName(s.getCustomer().getName());
-                    model.setLat(s.getCustomer().getAddress().getCoordinates().getLat());
-                    model.setLng(s.getCustomer().getAddress().getCoordinates().getLng());
+            if ("CUSTOMER_VISIT".equals(schedule.getCategory())
+                    && schedule.getCustomer() != null) {
 
-                    // Simulação POC: 15 ou 30 minutos aleatório
-                    model.setVisitDurationMinutes(
-                            Math.random() > 0.5 ? 15 : 30
-                    );
+                CustomerModel customer = new CustomerModel();
 
-                    customers.add(model);
-                });
+                customer.setName(schedule.getCustomer().getName());
+
+                int duration =
+                        (int) java.time.Duration.between(
+                                schedule.getStartAt(),
+                                schedule.getEndAt()
+                        ).toMinutes();
+
+                customer.setVisitDurationMinutes(duration);
+
+                customer.setLat(
+                        schedule.getCustomer().getAddress().getCoordinates().getLat());
+
+                customer.setLng(
+                        schedule.getCustomer().getAddress().getCoordinates().getLng());
+
+                customers.add(customer);
+            }
+        }
 
         return customers;
     }

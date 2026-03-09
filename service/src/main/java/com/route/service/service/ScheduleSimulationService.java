@@ -12,51 +12,57 @@ import java.util.List;
 public class ScheduleSimulationService {
 
     private static final LocalTime START_OF_DAY = LocalTime.of(8, 0);
-    private static final int TRAVEL_MINUTES = 30;
 
     public List<RouteStopDTO> simulate(
-            List<CustomerModel> orderedCustomers,
+            List<CustomerModel> customers,
+            List<Integer> route,
+            double[][] durationMatrix,
             LocalTime lunchStart,
             LocalTime lunchEnd) {
 
         List<RouteStopDTO> result = new ArrayList<>();
 
         LocalTime currentTime = START_OF_DAY;
-        boolean firstCustomer = true;
 
-        for (CustomerModel customer : orderedCustomers) {
+        for (int i = 1; i < route.size() - 1; i++) {
 
-            int duration = customer.getVisitDurationMinutes();
+            int currentIndex = route.get(i);
 
-            // Se não for o primeiro cliente, adiciona tempo de deslocamento
-            if (!firstCustomer) {
-                currentTime = currentTime.plusMinutes(TRAVEL_MINUTES);
+            CustomerModel customer = customers.get(currentIndex - 1);
+
+            int visitDuration = customer.getVisitDurationMinutes();
+
+            // Chegada
+            LocalTime arrival = currentTime;
+
+            // Respeita almoço
+            if (!arrival.isBefore(lunchStart) && arrival.isBefore(lunchEnd)) {
+                arrival = lunchEnd;
             }
 
-            firstCustomer = false;
-
-            // Se estiver no horário de almoço, pula
-            if (!currentTime.isBefore(lunchStart) && currentTime.isBefore(lunchEnd)) {
-                currentTime = lunchEnd;
-            }
-
-            LocalTime potentialEnd = currentTime.plusMinutes(duration);
-
-            // Se ultrapassar almoço, empurra para depois
-            if (currentTime.isBefore(lunchStart) && potentialEnd.isAfter(lunchStart)) {
-                currentTime = lunchEnd;
-                potentialEnd = currentTime.plusMinutes(duration);
-            }
+            LocalTime departure = arrival.plusMinutes(visitDuration);
 
             RouteStopDTO stop = new RouteStopDTO();
             stop.setCustomerName(customer.getName());
-            stop.setArrivalAt(currentTime);
-            stop.setDepartureAt(potentialEnd);
-            stop.setVisitDurationMinutes(duration);
+            stop.setArrivalAt(arrival);
+            stop.setDepartureAt(departure);
+            stop.setVisitDurationMinutes(visitDuration);
 
             result.add(stop);
 
-            currentTime = potentialEnd;
+            currentTime = departure;
+
+            // calcula deslocamento até próximo cliente
+            if (i < route.size() - 2) {
+
+                int nextIndex = route.get(i + 1);
+
+                double travelSeconds = durationMatrix[currentIndex][nextIndex];
+
+                long travelMinutes = (long) Math.ceil(travelSeconds / 60);
+
+                currentTime = currentTime.plusMinutes(travelMinutes);
+            }
         }
 
         return result;
